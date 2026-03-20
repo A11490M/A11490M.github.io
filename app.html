@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StudyHub — Browse Library</title>
+  <meta name="description" content="Browse and download free study materials — notes, books and papers shared by students." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>" />
+
+  <script type="module">
+    import { initializeApp }        from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getFirestore, collection, query, where, orderBy, getDocs, addDoc, Timestamp }
+                                    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+    import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+                                    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+    const firebaseConfig = {
+      apiKey:            "AIzaSyDo6V5cuVmp1nfQPDcxsFE3KO7kKY6vOMI",
+      authDomain:        "studyhub-v1.firebaseapp.com",
+      projectId:         "studyhub-v1",
+      storageBucket:     "studyhub-v1.firebasestorage.app",
+      messagingSenderId: "947641994578",
+      appId:             "1:947641994578:web:c8e1720564ab46fa62fe8b",
+    };
+
+    const app  = initializeApp(firebaseConfig);
+    const db   = getFirestore(app);
+    const auth = getAuth(app);
+    const provider = new GoogleAuthProvider();
+
+    let allDocs      = [];
+    let currentUser  = null;
+    let activeFilter = "all";
+    let searchQuery  = "";
+
+    const CLOUD_NAME    = "dgn71auou";
+    const UPLOAD_PRESET = "studyhub_unsigned";
+
+    function pdfThumb(url) {
+      if (!url || !url.includes("cloudinary.com") || !url.toLowerCase().includes(".pdf")) return null;
+      return url
+        .replace("/raw/upload/",   "/image/upload/pg_1,f_jpg,w_400,h_560,c_fit/")
+        .replace("/image/upload/", "/image/upload/pg_1,f_jpg,w_400,h_560,c_fit/")
+        .replace("pg_1,f_jpg,w_400,h_560,c_fit/pg_1,f_jpg,w_400,h_560,c_fit/", "pg_1,f_jpg,w_400,h_560,c_fit/");
+    }
+    function fmtSize(b) { return !b?"": b<1048576?(b/1024).toFixed(0)+" KB":(b/1048576).toFixed(1)+" MB"; }
+    function fmtDate(ts) { if (!ts) return ""; const d=ts.toDate?ts.toDate():new Date(ts); return d.toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}); }
+    function catIcon(c) { return {notes:"📝",books:"📗",papers:"📄"}[c]??"📄"; }
+    function catColor(c){ return {notes:"#6366F1",books:"#10B981",papers:"#F59E0B"}[c]??"#6366F1"; }
+
+    onAuthStateChanged(auth, user => { currentUser=user; renderHeader(); });
+
+    window.signIn = async () => { try { await signInWithPopup(auth,provider); } catch(e){ alert("Sign-in failed: "+e.message); } };
+    window.signOutUser = async () => { await signOut(auth); };
+
+    async function loadDocs() {
+      document.getElementById("grid").innerHTML = `<div class="loading"><div class="spinner"></div><p>Loading documents…</p></div>`;
+      try {
+        let snap;
+        try { snap = await getDocs(query(collection(db,"documents"),where("visibility","==","public"),orderBy("createdAt","desc"))); }
+        catch { snap = await getDocs(query(collection(db,"documents"),where("visibility","==","public"))); }
+        allDocs = snap.docs.map(d=>({id:d.id,...d.data()}));
+        allDocs.sort((a,b)=>(b.createdAt?.seconds??0)-(a.createdAt?.seconds??0));
+        renderGrid();
+      } catch(e) { document.getElementById("grid").innerHTML=`<div class="empty">Failed to load documents.<br><small>${e.message}</small></div>`; }
+    }
+
+    function filtered() {
+      return allDocs.filter(d => {
+        const matchCat = activeFilter==="all"||d.category===activeFilter;
+        const q=searchQuery.toLowerCase();
+        const matchQ=!q||d.title?.toLowerCase().includes(q)||d.subject?.toLowerCase().includes(q)||d.uploadedByName?.toLowerCase().includes(q)||d.description?.toLowerCase().includes(q);
+        return matchCat&&matchQ;
+      });
+    }
+
+    window.setFilter = f => {
+      activeFilter=f;
+      document.querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
+      document.querySelector(`[data-filter="${f}"]`).classList.add("active");
+      renderGrid();
+    };
+    window.onSearch = e => { searchQuery=e.target.value; renderGrid(); };
+
+    function renderGrid() {
+      const docs=filtered();
+      const grid=document.getElementById("grid");
+      document.getElementById("count").textContent=`${docs.length} document${docs.length!==1?"s":""}`;
+      if (docs.length===0) { grid.innerHTML=`<div class="empty">📭<br>No documents found.<br><small>Try a different search or filter.</small></div>`; return; }
+      grid.innerHTML=docs.map(d=>{
+        const thumb=pdfThumb(d.fileUrl); const color=catColor(d.category); const icon=catIcon(d.category);
+        return `<div class="card" onclick="openPreview('${d.id}')">
+          <div class="card-thumb">
+            ${thumb?`<img src="${thumb}" alt="" onerror="this.parentElement.innerHTML='<span class=thumb-icon>${icon}</span>'">`:`<span class="thumb-icon">${icon}</span>`}
+            <span class="cat-badge" style="background:${color}">${d.category??""}</span>
+          </div>
+          <div class="card-body">
+            <div class="card-title">${d.title}</div>
+            <div class="card-meta"><span>👤 ${d.uploadedByName??""}</span><span>${fmtSize(d.fileSize)}</span></div>
+            <div class="card-meta"><span>⭐ ${d.rating?.toFixed(1)??"0.0"}</span><span>⬇️ ${d.downloads??0}</span></div>
+          </div></div>`;
+      }).join("");
+    }
+
+    window.openPreview = id => {
+      const d=allDocs.find(x=>x.id===id); if(!d) return;
+      const thumb=pdfThumb(d.fileUrl); const color=catColor(d.category); const icon=catIcon(d.category);
+      document.getElementById("preview-content").innerHTML=`
+        <div class="preview-thumb">
+          ${thumb?`<img src="${thumb}" alt="${d.title}" style="width:100%;max-height:320px;object-fit:contain;border-radius:12px;">`:`<div style="height:180px;display:flex;align-items:center;justify-content:center;font-size:72px;">${icon}</div>`}
+        </div>
+        <div style="margin-top:16px">
+          <span class="cat-badge" style="background:${color};font-size:12px;padding:4px 10px;position:relative">${d.category??""}</span>
+          <h2 style="font-size:20px;font-weight:800;color:#F8FAFC;margin:10px 0 4px">${d.title}</h2>
+          ${d.description?`<p style="color:#94A3B8;font-size:14px;line-height:1.6;margin:0 0 12px">${d.description}</p>`:""}
+          <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+            <span style="color:#64748B;font-size:13px">👤 ${d.uploadedByName??""}</span>
+            <span style="color:#64748B;font-size:13px">📅 ${fmtDate(d.createdAt)}</span>
+            <span style="color:#64748B;font-size:13px">📦 ${fmtSize(d.fileSize)}</span>
+            <span style="color:#64748B;font-size:13px">⬇️ ${d.downloads??0}</span>
+            <span style="color:#64748B;font-size:13px">⭐ ${d.rating?.toFixed(1)??"0.0"}</span>
+          </div>
+          ${d.subject?`<div style="color:#64748B;font-size:13px;margin-bottom:16px">📚 ${d.subject}</div>`:""}
+          <a href="${d.fileUrl}" target="_blank" rel="noopener noreferrer" class="btn-open">Open / Download ↗</a>
+          <p style="color:#334155;font-size:11px;margin-top:10px;text-align:center">Free to access on web · No coins needed</p>
+        </div>`;
+      document.getElementById("preview-modal").style.display="flex";
+      document.body.style.overflow="hidden";
+    };
+    window.closePreview = () => { document.getElementById("preview-modal").style.display="none"; document.body.style.overflow=""; };
+
+    window.openUpload = () => { if(!currentUser){window.signIn();return;} document.getElementById("upload-modal").style.display="flex"; document.body.style.overflow="hidden"; };
+    window.closeUpload = () => { document.getElementById("upload-modal").style.display="none"; document.body.style.overflow=""; };
+
+    document.addEventListener("click", e => {
+      if (e.target.id==="preview-modal") closePreview();
+      if (e.target.id==="upload-modal") closeUpload();
+    });
+
+    window.handleUpload = async e => {
+      e.preventDefault(); if(!currentUser) return;
+      const title=document.getElementById("u-title").value.trim();
+      const subject=document.getElementById("u-subject").value.trim();
+      const category=document.getElementById("u-category").value;
+      const file=document.getElementById("u-file").files[0];
+      const btn=document.getElementById("u-btn");
+      if(!title||!file){alert("Title and file are required.");return;}
+      btn.disabled=true; btn.textContent="Uploading…";
+      try {
+        const form=new FormData();
+        form.append("file",file); form.append("upload_preset",UPLOAD_PRESET); form.append("folder","studyhub_documents");
+        const res=await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/raw/upload`,{method:"POST",body:form});
+        if(!res.ok) throw new Error("Upload failed");
+        const data=await res.json();
+        await addDoc(collection(db,"documents"),{
+          title,subject,category,
+          description:document.getElementById("u-desc").value.trim(),
+          fileUrl:data.secure_url, fileName:file.name, fileSize:file.size,
+          uploadedBy:currentUser.uid, uploadedByName:currentUser.displayName||"Student",
+          visibility:"public", rating:0, ratingCount:0, downloads:0,
+          createdAt:Timestamp.now(), updatedAt:Timestamp.now(),
+        });
+        alert("Uploaded successfully!");
+        closeUpload(); e.target.reset(); loadDocs();
+      } catch(err){ alert("Upload failed: "+err.message); }
+      finally { btn.disabled=false; btn.textContent="Upload"; }
+    };
+
+    function renderHeader() {
+      const area=document.getElementById("auth-area");
+      if(currentUser){
+        area.innerHTML=`<span style="color:#94A3B8;font-size:13px">${currentUser.displayName?.split(" ")[0]??"User"}</span>
+          <button class="btn-upload" onclick="openUpload()">+ Upload</button>
+          <button class="btn-signout" onclick="signOutUser()">Sign out</button>`;
+      } else {
+        area.innerHTML=`<button class="btn-signin" onclick="signIn()">
+          <svg width="16" height="16" viewBox="0 0 24 24" style="margin-right:6px;vertical-align:middle"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+          Sign in with Google</button>`;
+      }
+    }
+
+    loadDocs();
+  </script>
+
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0F172A;color:#F8FAFC;min-height:100vh}
+    header{position:sticky;top:0;z-index:100;background:#1E293B;border-bottom:1px solid #334155;padding:12px 20px;display:flex;align-items:center;gap:12px}
+    .logo{font-size:20px;font-weight:800;color:#F8FAFC;text-decoration:none}.logo span{color:#6366F1}
+    header .spacer{flex:1}
+    #auth-area{display:flex;align-items:center;gap:10px}
+    .btn-signin{background:#1E293B;color:#F8FAFC;border:1px solid #334155;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;transition:background .15s}
+    .btn-signin:hover{background:#334155}
+    .btn-upload{background:#6366F1;color:#FFF;border:none;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;transition:opacity .15s}
+    .btn-upload:hover{opacity:.85}
+    .btn-signout{background:transparent;color:#64748B;border:1px solid #334155;border-radius:10px;padding:8px 12px;font-size:12px;cursor:pointer;transition:color .15s}
+    .btn-signout:hover{color:#F8FAFC}
+    .toolbar{padding:16px 20px;background:#1E293B;border-bottom:1px solid #334155;display:flex;flex-direction:column;gap:12px}
+    .search-box{width:100%;background:#0F172A;border:1px solid #334155;border-radius:12px;padding:10px 16px;color:#F8FAFC;font-size:14px;outline:none;transition:border-color .15s}
+    .search-box:focus{border-color:#6366F1}.search-box::placeholder{color:#475569}
+    .chips{display:flex;gap:8px;flex-wrap:wrap}
+    .chip{padding:6px 14px;border-radius:20px;background:#0F172A;border:1px solid #334155;color:#64748B;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+    .chip:hover{border-color:#6366F1;color:#A5B4FC}.chip.active{background:#6366F1;border-color:#6366F1;color:#FFF}
+    .content{padding:20px;max-width:1200px;margin:0 auto}
+    .count{color:#475569;font-size:13px;margin-bottom:16px}
+    #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
+    .card{background:#1E293B;border:1px solid #334155;border-radius:16px;overflow:hidden;cursor:pointer;transition:transform .15s,border-color .15s}
+    .card:hover{transform:translateY(-2px);border-color:#6366F1}
+    .card-thumb{height:140px;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#0F172A}
+    .card-thumb img{width:100%;height:100%;object-fit:cover}.thumb-icon{font-size:52px}
+    .cat-badge{position:absolute;top:8px;left:8px;border-radius:6px;padding:2px 8px;font-size:10px;font-weight:700;color:#FFF;text-transform:capitalize}
+    .card-body{padding:12px}
+    .card-title{font-size:13px;font-weight:700;color:#F8FAFC;margin-bottom:6px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .card-meta{display:flex;justify-content:space-between;font-size:11px;color:#475569;margin-top:3px}
+    .loading,.empty{grid-column:1/-1;text-align:center;padding:60px 20px;color:#475569;line-height:2}
+    .spinner{width:36px;height:36px;border:3px solid #334155;border-top-color:#6366F1;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 16px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    #preview-modal,#upload-modal{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.85);align-items:center;justify-content:center;padding:20px}
+    .modal-box{background:#1E293B;border-radius:20px;width:100%;max-width:540px;max-height:90vh;overflow-y:auto;padding:24px;position:relative}
+    .modal-close{position:absolute;top:16px;right:16px;background:#334155;border:none;color:#F8FAFC;width:32px;height:32px;border-radius:50%;font-size:16px;cursor:pointer;line-height:32px;text-align:center}
+    .modal-close:hover{background:#475569}
+    .btn-open{display:block;text-align:center;background:#6366F1;color:#FFF;border-radius:14px;padding:14px;font-size:15px;font-weight:700;text-decoration:none;transition:opacity .15s;margin-top:16px}
+    .btn-open:hover{opacity:.85}
+    .upload-form{display:flex;flex-direction:column;gap:14px}
+    .upload-form h2{font-size:18px;font-weight:800;color:#F8FAFC}
+    .form-label{font-size:12px;font-weight:600;color:#94A3B8;margin-bottom:5px;display:block}
+    .form-input,.form-select,.form-textarea{width:100%;background:#0F172A;border:1px solid #334155;border-radius:10px;padding:10px 14px;color:#F8FAFC;font-size:14px;outline:none;transition:border-color .15s;font-family:inherit}
+    .form-input:focus,.form-select:focus,.form-textarea:focus{border-color:#6366F1}
+    .form-textarea{min-height:80px;resize:vertical}.form-select option{background:#1E293B}
+    .file-zone{border:2px dashed #334155;border-radius:12px;padding:24px;text-align:center;cursor:pointer;color:#64748B;font-size:14px;transition:border-color .15s}
+    .file-zone:hover{border-color:#6366F1}
+    .btn-submit{background:#6366F1;color:#FFF;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;transition:opacity .15s}
+    .btn-submit:hover{opacity:.85}.btn-submit:disabled{opacity:.5;cursor:not-allowed}
+    footer{text-align:center;padding:32px 20px;color:#334155;font-size:12px;margin-top:40px;border-top:1px solid #1E293B}
+    footer a{color:#475569;text-decoration:none}footer a:hover{color:#94A3B8}
+    @media(max-width:600px){header{padding:10px 14px}.logo{font-size:17px}.content{padding:14px}#grid{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}}
+  </style>
+</head>
+<body>
+  <header>
+    <a class="logo" href="index.html">Study<span>Hub</span></a>
+    <div class="spacer"></div>
+    <div id="auth-area"><button class="btn-signin" onclick="signIn()">Sign in with Google</button></div>
+  </header>
+
+  <div class="toolbar">
+    <input class="search-box" type="text" placeholder="🔍  Search by title, subject or uploader…" oninput="onSearch(event)" />
+    <div class="chips">
+      <button class="chip active" data-filter="all"    onclick="setFilter('all')">All</button>
+      <button class="chip"        data-filter="notes"  onclick="setFilter('notes')">📝 Notes</button>
+      <button class="chip"        data-filter="books"  onclick="setFilter('books')">📗 Books</button>
+      <button class="chip"        data-filter="papers" onclick="setFilter('papers')">📄 Papers</button>
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="count" id="count"></div>
+    <div id="grid"></div>
+  </div>
+
+  <footer>
+    <p>StudyHub © 2025 Anitek Studios &nbsp;·&nbsp; <a href="index.html">Home</a> &nbsp;·&nbsp; <a href="https://github.com/A11490M/A11490M.github.io/releases/download/v1.0.0/app-release.apk">Download Android App</a></p>
+  </footer>
+
+  <div id="preview-modal">
+    <div class="modal-box">
+      <button class="modal-close" onclick="closePreview()">✕</button>
+      <div id="preview-content"></div>
+    </div>
+  </div>
+
+  <div id="upload-modal">
+    <div class="modal-box">
+      <button class="modal-close" onclick="closeUpload()">✕</button>
+      <form class="upload-form" onsubmit="handleUpload(event)">
+        <h2>Upload Document</h2>
+        <div><label class="form-label" for="u-title">Title *</label><input class="form-input" id="u-title" type="text" placeholder="e.g. Physics Chapter 5 Notes" required /></div>
+        <div><label class="form-label" for="u-subject">Subject</label><input class="form-input" id="u-subject" type="text" placeholder="e.g. Physics, Maths, Chemistry" /></div>
+        <div><label class="form-label" for="u-category">Category</label>
+          <select class="form-select" id="u-category"><option value="notes">📝 Notes</option><option value="books">📗 Books</option><option value="papers">📄 Papers</option></select></div>
+        <div><label class="form-label" for="u-desc">Description</label><textarea class="form-textarea" id="u-desc" placeholder="Brief description…"></textarea></div>
+        <div><label class="form-label">File * (PDF, DOC, image)</label>
+          <div class="file-zone" onclick="document.getElementById('u-file').click()">📂 Click to select file
+            <input id="u-file" type="file" accept=".pdf,.doc,.docx,image/*" style="display:none"
+              onchange="this.previousElementSibling.textContent=this.files[0]?.name??'📂 Click to select file'" required /></div></div>
+        <button class="btn-submit" id="u-btn" type="submit">Upload</button>
+        <p style="color:#475569;font-size:12px;text-align:center">Uploads are visible to all StudyHub users on web and mobile.</p>
+      </form>
+    </div>
+  </div>
+</body>
+</html>
