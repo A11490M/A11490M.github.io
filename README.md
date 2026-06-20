@@ -2,7 +2,7 @@
 
 <img src="https://img.shields.io/badge/StudyHub-v1.0.0-4f8ef7?style=for-the-badge&logo=bookstack&logoColor=white"/>
 
-# 📚 StudyHub
+# 📚 Synaptix
 ### A Peer-to-Peer Study Material Sharing Platform
 
 *Students helping students learn — one upload at a time.*
@@ -26,7 +26,7 @@
 
 ## 🌟 About StudyHub
 
-StudyHub was born from a simple frustration — students spend enormous time hunting for good study material scattered across WhatsApp groups, Telegram channels, and broken Google Drive links.
+Synaptix was born from a simple frustration — students spend enormous time hunting for good study material scattered across WhatsApp groups, Telegram channels, and broken Google Drive links.
 
 **The solution?** A community-driven knowledge hub where students help students. Upload your notes, download what others share, join real-time study groups, and earn coins for contributing.
 
